@@ -114,3 +114,28 @@ const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
   console.log(`✅ Serveur proxy Odoo démarré sur port ${PORT}`)
 })
+
+app.get('/api/rdvs', async (req, res) => {
+  const uid = await getUID()
+  if (!uid) return res.status(401).json({ error: 'Auth failed' })
+
+  const response = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'calendar.event',
+        method: 'search_read',
+        args: [[]],
+        kwargs: {
+          fields: ['name', 'start', 'stop', 'partner_ids', 'location', 'description'],
+          limit: 100,
+        }
+      }
+    })
+  })
+  const data = await response.json()
+  res.json(data.result || [])
+})
