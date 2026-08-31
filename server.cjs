@@ -139,3 +139,61 @@ app.get('/api/rdvs', async (req, res) => {
   const data = await response.json()
   res.json(data.result || [])
 })
+
+app.get('/api/metriques', async (req, res) => {
+  const uid = await getUID()
+  if (!uid) return res.status(401).json({ error: 'Auth failed' })
+
+  // RDVs du mois en cours
+  const maintenant = new Date()
+  const debutMois = new Date(maintenant.getFullYear(), maintenant.getMonth(), 1).toISOString()
+  const finMois = new Date(maintenant.getFullYear(), maintenant.getMonth() + 1, 0).toISOString()
+
+  const response = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'calendar.event',
+        method: 'search_read',
+        args: [[['start', '>=', debutMois], ['start', '<=', finMois]]],
+        kwargs: {
+          fields: ['name', 'start', 'stop', 'location'],
+          limit: 100,
+        }
+      }
+    })
+  })
+  const data = await response.json()
+  const rdvs = data.result || []
+
+  // Pistes CRM en attente
+  const responseCRM = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'crm.lead',
+        method: 'search_read',
+        args: [[['stage_id.name', '=', 'New']]],
+        kwargs: {
+          fields: ['name', 'partner_name', 'create_date'],
+          limit: 50,
+        }
+      }
+    })
+  })
+  const dataCRM = await responseCRM.json()
+  const pistes = dataCRM.result || []
+
+  res.json({
+    rdvsMois: rdvs.length,
+    demandesEnAttente: pistes.length,
+    rdvs: rdvs.slice(0, 5),
+    pistes: pistes.slice(0, 3),
+  })
+})
