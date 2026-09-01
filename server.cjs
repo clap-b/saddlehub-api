@@ -197,3 +197,28 @@ app.get('/api/metriques', async (req, res) => {
     pistes: pistes.slice(0, 3),
   })
 })
+
+app.get('/api/pistes', async (req, res) => {
+  const uid = await getUID()
+  if (!uid) return res.status(401).json({ error: 'Auth failed' })
+
+  const response = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'crm.lead',
+        method: 'search_read',
+        args: [[]],
+        kwargs: {
+          fields: ['name', 'partner_name', 'email_from', 'phone', 'street', 'city', 'description', 'create_date', 'stage_id'],
+          limit: 100,
+        }
+      }
+    })
+  })
+  const data = await response.json()
+  res.json(data.result || [])
+})
