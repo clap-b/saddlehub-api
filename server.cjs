@@ -1,6 +1,10 @@
 const express = require('express')
 const cors = require('cors')
 const fetch = require('node-fetch')
+
+const { Resend } = require('resend')
+const resend = new Resend(process.env.RESEND_API_KEY)
+
 require('dotenv').config()
 
 const app = express()
@@ -304,6 +308,46 @@ app.post('/api/seance', async (req, res) => {
 })
 
 const PORT = process.env.PORT || 3001
+
+app.post('/api/compte-rendu', async (req, res) => {
+  const { clientEmail, clientNom, prestations, notes, montant, signature } = req.body
+
+  try {
+    await resend.emails.send({
+      from: 'SaddleHub <onboarding@resend.dev>',
+      to: clientEmail,
+      subject: 'Compte rendu de votre séance — Équin\'Equilibre',
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+          <h2 style="color: #1D9E75;">Compte rendu de séance</h2>
+          <p>Bonjour ${clientNom},</p>
+          <p>Voici le résumé de votre séance avec Tammy — Équin'Equilibre.</p>
+          
+          <h3 style="color: #333;">Prestations réalisées</h3>
+          <ul>
+            ${prestations.map(p => '<li>' + p.label + (p.prix ? ' — ' + p.prix + ' CHF' : '') + '</li>').join('')}
+          </ul>
+          
+          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <strong>Total : ${montant} CHF</strong>
+          </div>
+          
+          ${notes ? '<h3 style="color: #333;">Notes</h3><p>' + notes + '</p>' : ''}
+          
+          ${signature ? '<h3 style="color: #333;">Signature</h3><img src="' + signature + '" style="border: 1px solid #ddd; border-radius: 8px; max-width: 300px;" />' : ''}
+          
+          <hr style="margin: 24px 0; border: none; border-top: 1px solid #eee;" />
+          <p style="color: #888; font-size: 12px;">Équin'Equilibre · Tammy · equinequilibre.odoo.com</p>
+        </div>
+      `
+    })
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Erreur envoi email:', err)
+    res.status(500).json({ error: 'Erreur envoi email' })
+  }
+})
+
 app.listen(PORT, () => {
   console.log('✅ Serveur proxy Odoo démarré sur port ' + PORT)
 })
