@@ -222,3 +222,64 @@ app.get('/api/pistes', async (req, res) => {
   const data = await response.json()
   res.json(data.result || [])
 })
+
+app.post('/api/signature', async (req, res) => {
+  const uid = await getUID()
+  if (!uid) return res.status(401).json({ error: 'Auth failed' })
+
+  const { signatureBase64, clientNom, montant, prestations } = req.body
+
+  // 1. Créer la facture dans Odoo
+  const responseFacture = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move',
+        method: 'create',
+        args: [{
+          move_type: 'out_invoice',
+          partner_id: false,
+          invoice_line_ids: prestations.map(p => ([0, 0, {
+            name: p.label,
+            price_unit: p.prix || 0,
+            quantity: 1,
+          }]))
+        }],
+        kwargs: {}
+      }
+    })
+  })
+  const dataFacture = await responseFacture.json()
+  const factureId = dataFacture.result
+
+  if (!factureId) return res.status(500).json({ error: 'Facture non créée' })
+
+  // 2. Attacher la signature à la facture
+  const signatureData = signatureBase64.replace('data:image/png;base64,', '')
+  
+  await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'ir.attachment',
+        method: 'create',
+        args: [{
+          name: 'signature_' + clientNom + '.png',
+          type: 'binary',
+          datas: signatureData,
+          res_model: 'account.move',
+          res_id: factureId,
+        }],
+        kwargs: {}
+      }
+    })
+  })
+
+  res.json({ success: true, factureId })
+})
