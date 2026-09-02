@@ -5,7 +5,7 @@ require('dotenv').config()
 
 const app = express()
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '50mb' }))
 
 const ODOO_URL = process.env.ODOO_URL
 const ODOO_DB = process.env.ODOO_DB
@@ -110,11 +110,6 @@ app.get('/api/produits', async (req, res) => {
   res.json(data.result || [])
 })
 
-const PORT = process.env.PORT || 3001
-app.listen(PORT, () => {
-  console.log(`✅ Serveur proxy Odoo démarré sur port ${PORT}`)
-})
-
 app.get('/api/rdvs', async (req, res) => {
   const uid = await getUID()
   if (!uid) return res.status(401).json({ error: 'Auth failed' })
@@ -140,16 +135,40 @@ app.get('/api/rdvs', async (req, res) => {
   res.json(data.result || [])
 })
 
+app.get('/api/pistes', async (req, res) => {
+  const uid = await getUID()
+  if (!uid) return res.status(401).json({ error: 'Auth failed' })
+
+  const response = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'crm.lead',
+        method: 'search_read',
+        args: [[]],
+        kwargs: {
+          fields: ['name', 'partner_name', 'email_from', 'phone', 'street', 'city', 'description', 'create_date', 'stage_id'],
+          limit: 100,
+        }
+      }
+    })
+  })
+  const data = await response.json()
+  res.json(data.result || [])
+})
+
 app.get('/api/metriques', async (req, res) => {
   const uid = await getUID()
   if (!uid) return res.status(401).json({ error: 'Auth failed' })
 
-  // RDVs du mois en cours
   const maintenant = new Date()
   const debutMois = new Date(maintenant.getFullYear(), maintenant.getMonth(), 1).toISOString()
   const finMois = new Date(maintenant.getFullYear(), maintenant.getMonth() + 1, 0).toISOString()
 
-  const response = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+  const responseRdvs = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -166,10 +185,9 @@ app.get('/api/metriques', async (req, res) => {
       }
     })
   })
-  const data = await response.json()
-  const rdvs = data.result || []
+  const dataRdvs = await responseRdvs.json()
+  const rdvs = dataRdvs.result || []
 
-  // Pistes CRM en attente
   const responseCRM = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -198,38 +216,12 @@ app.get('/api/metriques', async (req, res) => {
   })
 })
 
-app.get('/api/pistes', async (req, res) => {
+app.post('/api/seance', async (req, res) => {
   const uid = await getUID()
   if (!uid) return res.status(401).json({ error: 'Auth failed' })
 
-  const response = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'crm.lead',
-        method: 'search_read',
-        args: [[]],
-        kwargs: {
-          fields: ['name', 'partner_name', 'email_from', 'phone', 'street', 'city', 'description', 'create_date', 'stage_id'],
-          limit: 100,
-        }
-      }
-    })
-  })
-  const data = await response.json()
-  res.json(data.result || [])
-})
+  const { signatureBase64, clientNom, montant, prestations, notes, photos } = req.body
 
-app.post('/api/signature', async (req, res) => {
-  const uid = await getUID()
-  if (!uid) return res.status(401).json({ error: 'Auth failed' })
-
-  const { signatureBase64, clientNom, montant, prestations } = req.body
-
-  // 1. Créer la facture dans Odoo
   const responseFacture = await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -242,6 +234,7 @@ app.post('/api/signature', async (req, res) => {
         args: [{
           move_type: 'out_invoice',
           partner_id: false,
+          narration: notes || '',
           invoice_line_ids: prestations.map(p => ([0, 0, {
             name: p.label,
             price_unit: p.prix || 0,
@@ -257,29 +250,60 @@ app.post('/api/signature', async (req, res) => {
 
   if (!factureId) return res.status(500).json({ error: 'Facture non créée' })
 
-  // 2. Attacher la signature à la facture
-  const signatureData = signatureBase64.replace('data:image/png;base64,', '')
-  
-  await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'call',
-      params: {
-        model: 'ir.attachment',
-        method: 'create',
-        args: [{
-          name: 'signature_' + clientNom + '.png',
-          type: 'binary',
-          datas: signatureData,
-          res_model: 'account.move',
-          res_id: factureId,
-        }],
-        kwargs: {}
-      }
+  if (signatureBase64) {
+    const signatureData = signatureBase64.replace('data:image/png;base64,', '')
+    await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'ir.attachment',
+          method: 'create',
+          args: [{
+            name: 'signature_' + clientNom + '.png',
+            type: 'binary',
+            datas: signatureData,
+            res_model: 'account.move',
+            res_id: factureId,
+          }],
+          kwargs: {}
+        }
+      })
     })
-  })
+  }
+
+  if (photos && photos.length > 0) {
+    for (let i = 0; i < photos.length; i++) {
+      const photoData = photos[i].replace(/^data:image\/\w+;base64,/, '')
+      await fetch(`${ODOO_URL}/web/dataset/call_kw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'call',
+          params: {
+            model: 'ir.attachment',
+            method: 'create',
+            args: [{
+              name: 'photo_' + clientNom + '_' + (i + 1) + '.png',
+              type: 'binary',
+              datas: photoData,
+              res_model: 'account.move',
+              res_id: factureId,
+            }],
+            kwargs: {}
+          }
+        })
+      })
+    }
+  }
 
   res.json({ success: true, factureId })
+})
+
+const PORT = process.env.PORT || 3001
+app.listen(PORT, () => {
+  console.log('✅ Serveur proxy Odoo démarré sur port ' + PORT)
 })
